@@ -1,0 +1,106 @@
+#!/usr/bin/python3
+
+import argparse
+import getpass
+import os
+import pathlib
+import socket
+import subprocess
+import sys
+import urllib.request
+import webbrowser
+
+
+HOME = pathlib.Path(os.environ.get("HOME", "~")).expanduser()
+
+
+def sshkey():
+    ssh_dir = HOME / ".ssh"
+    ssh_dir.mkdir(exist_ok=True)
+    keyfile = ssh_dir / "id_ed25519"
+    if keyfile.exists():
+        print("key already exists")
+        return
+    key_comment = f"{getpass.getuser()}@{socket.gethostname()}"
+    subprocess.check_call([
+        "ssh-keygen", 
+        "-t", "ed25519", 
+        "-f", str(keyfile),
+        "-N", "",
+        "-C", key_comment,
+    ])
+    with open(keyfile.with_suffix(".pub"), mode="r") as f:
+        pubkey = f.read()
+
+    print(f"pubkey:\n{pubkey}\n\nOpen GH keys page? [yN]: ", end="")
+    if input().lower() == "y":
+        webbrowser.open("https://github.com/settings/keys")
+    
+
+
+git_config_entries = {
+    "init.defaultBranch": "main",
+    "user.email": "prometheus235@gmail.com",
+    "user.name": "Nicholas Timkovich",
+}
+git_ignore_global = [
+    ".vscode",
+    "~*",
+]
+
+def _git_conf_line(name, value):
+    base_cmd = ["git", "config", "--global", name, value]
+    return subprocess.check_call(base_cmd, universal_newlines=True)
+
+def gitconfig():
+    try:
+        current_conf = subprocess.check_output(["git", "config", "--list"], universal_newlines=True)
+    except subprocess.CalledProcessError:
+        print("failed call, is git installed?")
+        return 1
+    current_conf = dict(kv.split("=", 1) for kv in current_conf.splitlines())
+    if all(value == current_conf.get(name.lower()) for name, value in git_config_entries.items()):
+        print("all looks good.")
+        return
+    for name, value in git_config_entries.items():
+        _git_conf_line(name, value)
+
+
+pyenv_installer = "https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer"
+def _get_pyenv_installer():
+    resp = urllib.request.urlopen(pyenv_installer)
+    content_type = resp.headers["Content-Type"]
+    charset = "ascii"
+    if content_type:
+        _mime, *others = [p.strip() for p in content_type.split(";")]
+        for o in others:
+            if not o.startswith("charset="):
+                continue
+            charset = o.split("=")[1]
+    content = resp.read()
+    return content.decode(encoding=charset)
+
+def pyenv():
+    installer_script = _get_pyenv_installer()
+    subprocess.check_call(["bash"], stdin=installer_script, universal_newlines=True)
+
+        
+    # curl -L  | bash
+
+
+FUNCS = {
+    "gitconf": gitconfig,
+    "sshkey": sshkey,
+}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("mode", type=str)
+    args = parser.parse_args()
+
+    return FUNCS[args.mode]()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
