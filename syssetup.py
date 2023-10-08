@@ -6,7 +6,9 @@ import asyncio
 import datetime
 import enum
 import getpass
+import http
 import inspect
+import json
 import logging
 import os
 import pathlib
@@ -206,9 +208,15 @@ def gitconfig(args):
 
 
 pyenv_installer = "https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer"
-def _get_pyenv_installer():
-    resp = urllib.request.urlopen(pyenv_installer)
+
+def _download(url):
+    L.debug(f"> GET {url}")
+    resp = urllib.request.urlopen(url)
+    statuscode = resp.status if sys.version_info >= (3, 9) else resp.code
+    L.debug(f"< {statuscode} {http.HTTPStatus(statuscode).phrase}")
     content_type = resp.headers["Content-Type"]
+    L.debug(f"< Content-Type: {content_type}")
+    L.debug(f"< Content-Length: {resp.headers['Content-Length']}")
     charset = "ascii"
     if content_type:
         _mime, *others = [p.strip() for p in content_type.split(";")]
@@ -217,7 +225,6 @@ def _get_pyenv_installer():
                 continue
             charset = o.split("=")[1]
     content = resp.read()
-    L.debug(f"downloaded {len(content)} B script")
     return content.decode(encoding=charset)
 
 
@@ -226,50 +233,85 @@ PYENV_ROOT = pathlib.Path(os.environ["HOME"]) / PYENV_REL_HOME
 
 @subcommand()
 def pyenv(args):
-    # installer_script = _get_pyenv_installer()
+    installer_script = _download(pyenv_installer)
 
-    # proc = subprocess.Popen(
-    #     ["bash"], 
-    #     stdin=subprocess.PIPE,
-    #     stdout=subprocess.PIPE,
-    #     stderr=subprocess.PIPE,
-    #     universal_newlines=True, 
-    #     env={**os.environ, "PYENV_ROOT": str(PYENV_ROOT)},
-    # )
-    # L.info("launching script in bash...")
-    # stdout, stderr = proc.communicate(installer_script)
-    # retcode = proc.wait()
-    # if retcode:
-    #     L.error(f"script failed! retval: {retcode}")
-    #     print_abbreviated_log("stdout", "93", stdout)
-    #     print_abbreviated_log("stderr", "91", stderr)
-    #     return retcode
+    proc = subprocess.Popen(
+        ["bash"], 
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True, 
+        env={**os.environ, "PYENV_ROOT": str(PYENV_ROOT)},
+    )
+    L.info("launching script in bash...")
+    stdout, stderr = proc.communicate(installer_script)
+    retcode = proc.wait()
+    if retcode:
+        L.error(f"script failed! retval: {retcode}")
+        print_abbreviated_log("stdout", "93", stdout)
+        print_abbreviated_log("stderr", "91", stderr)
+        return retcode
 
-    # L.info("configuring rcfile")
-    # configure_pyenv_for_shell(os.environ["SHELL"].split("/")[-1])
-    install_pyenv_libs()
+    L.info("configuring rcfile")
+    configure_pyenv_for_shell(os.environ["SHELL"].split("/")[-1])
+    check_pybuild_libs()
+
+
+@subcommand()
+@distrodispatch
+def install_pybuild_libs(args):
+    L.warning("unknown distro, not sure what libs to use")
+    return 1
+
+
+APT_PYBUILD_PACKAGES = [
+    "zlib1g-dev",
+    "zlib1g",
+    "libssl-dev", 
+    "libbz2-dev", 
+    "libsqlite3-dev",
+    "libreadline-dev",
+    "libffi-dev",
+    "liblzma-dev",
+    "tk-dev",
+]
+
+@install_pybuild_libs.register(OS.DEBIAN)
+def _(args):
+    need_libs = missing_pybuild_libs()
+    if not need_libs:
+        L.info("looks good, nothing to do")
+        return
+    L.info(f"installing: {', '.join(need_libs)}")
+    # subprocess.check_call(["sudo", "apt-get", "update"])
+    subprocess.check_call(["sudo", "apt-get", "install", "-y", *need_libs])
 
 
 @distrodispatch
-def install_pyenv_libs():
+def missing_pybuild_libs():
     L.warning("unknown distro, not sure what libs to use")
+    return 1
 
 
-@install_pyenv_libs.register(OS.DEBIAN)
+@missing_pybuild_libs.register(OS.DEBIAN)
 def _():
-    packages = [
-        "zlib1g-dev",
-        "zlib1g",
-        "libssl-dev", 
-        "libbz2-dev", 
-        "libsqlite3-dev",
-        "libreadline-dev"
-    ]
-    print("# to run:")
-    print("sudo apt-get update")
-    print("sudo apt-get install -y \\\n    ", end="")
-    print(" \\\n    ".join(packages))
-    # subprocess.check_call(["apt-"])
+    have = {False: set(), True: set()}
+    for pkg in APT_PYBUILD_PACKAGES:
+        have["installed" in deb_package_status(pkg)].add(pkg)
+    L.debug(f"package installed?: {have}")
+    return have[False]
+
+
+def deb_package_status(pkg_name):
+    out = subprocess.check_output(["dpkg", "--status", pkg_name], universal_newlines=True)
+    for line in (l.strip() for l in out.splitlines()):
+        if not line.startswith("Status:"):
+            continue
+        _status, statuses = line.split(":", 1)
+        break
+    else:
+        return set()
+    return set(statuses.split())
 
 
 def print_abbreviated_log(name, colorcode, content, line_lim=20):
@@ -304,6 +346,40 @@ def configure_pyenv_for_shell(shell):
             L.info(f"snippet already appears in {snippet['rcfile']}")
             return
         f.write(snippet["cmds"])
+
+
+@subcommand()
+def pyenv_install_supported(args):
+    L.debug("requesting eol data")
+    versions = json.loads(_download("https://endoflife.date/api/Python.json"))
+    L.debug(f"found {len(versions)} version cycles")
+    today = datetime.datetime.today().strftime("%Y-%m-%d")
+    supported = [ver["latest"] for ver in versions if ver["eol"] >= today]
+   
+    L.info("to install: " + ", ".join(supported))
+
+    if missing_pybuild_libs():
+        print("missing libraries to build Pythons, run command 'install-pybuild-libs'")
+        return 1
+
+    for ver in supported:
+        L.info(f"pyenv install {ver}")
+        subprocess.check_call(
+            ["pyenv", "install", ver, "--skip-existing"], 
+            executable=PYENV_ROOT / "bin" / "pyenv",
+        )
+
+
+JUPYTER_PY_VER = "3.11"
+JUPYTER_DIR = pathlib.Path("~/.jupyter").expanduser()
+
+@subcommand()
+def jupyter_server(args):
+    subprocess.check_call([f"python{JUPYTER_PY_VER}", "-mvenv", JUPYTER_DIR])
+    subprocess.check_call(
+        ["python", "-mpip", "install", "jupyterlab"],
+        executable=JUPYTER_DIR / "bin" / "python",
+    )
 
 
 def main():
