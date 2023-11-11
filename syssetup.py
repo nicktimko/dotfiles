@@ -254,7 +254,7 @@ def pyenv(args):
 
     L.info("configuring rcfile")
     configure_pyenv_for_shell(os.environ["SHELL"].split("/")[-1])
-    check_pybuild_libs()
+    print(missing_pybuild_libs())
 
 
 @subcommand()
@@ -290,7 +290,6 @@ def _(args):
 @distrodispatch
 def missing_pybuild_libs():
     L.warning("unknown distro, not sure what libs to use")
-    return 1
 
 
 @missing_pybuild_libs.register(OS.DEBIAN)
@@ -375,10 +374,9 @@ JUPYTER_DIR = pathlib.Path("~/.jupyter").expanduser()
 
 @subcommand()
 def jupyter_server(args):
-    subprocess.check_call([f"python{JUPYTER_PY_VER}", "-mvenv", JUPYTER_DIR])
+    subprocess.check_call([f"python{JUPYTER_PY_VER}", "-m", "venv", JUPYTER_DIR])
     subprocess.check_call(
-        ["python", "-mpip", "install", "jupyterlab"],
-        executable=JUPYTER_DIR / "bin" / "python",
+        [str(JUPYTER_DIR / "bin" / "python"), "-m", "pip", "install", "jupyterlab"],
     )
 
 
