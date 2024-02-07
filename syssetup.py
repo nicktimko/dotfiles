@@ -370,14 +370,43 @@ def pyenv_install_supported(args):
 
 
 JUPYTER_PY_VER = "3.11"
-JUPYTER_DIR = pathlib.Path("~/.jupyter").expanduser()
+JUPYTER_DIR = "~/.jupyter"
+JUPYTER_CONF_FILENAME = "jup-conf.py"
+JUPYTER_ROOT_DIR = "~/Code"
+
+_JUPYTER_ENTRY_SCRIPT = f"""\
+#!/bin/sh
+
+SCRIPT=$(readlink -f "$0")
+SCRIPTPATH=$(dirname "$SCRIPT")
+
+$SCRIPTPATH/bin/python -m jupyter lab \\
+    --config $SCRIPTPATH/{JUPYTER_CONF_FILENAME}
+"""
+
+_JUPYTER_CONF = f"""\
+c = get_config() # noqa
+c.ServerApp.port = 2222
+
+c.ServerApp.open_browser = False
+c.ExtensionApp.open_browser = False
+c.LabServerApp.open_browser = False
+c.LabApp.open_browser = False
+
+c.ServerApp.root_dir = '{str(pathlib.Path(JUPYTER_ROOT_DIR).expanduser())}'
+"""
 
 @subcommand()
 def jupyter_server(args):
-    subprocess.check_call([f"python{JUPYTER_PY_VER}", "-m", "venv", JUPYTER_DIR])
-    subprocess.check_call(
-        [str(JUPYTER_DIR / "bin" / "python"), "-m", "pip", "install", "jupyterlab"],
-    )
+    jupyter_dir = pathlib.Path(JUPYTER_DIR).expanduser()
+    # subprocess.check_call([f"python{JUPYTER_PY_VER}", "-m", "venv", jupyter_dir])
+    # subprocess.check_call(
+        # [str(jupyter_dir / "bin" / "python"), "-m", "pip", "install", "jupyterlab"],
+    # )
+    with open(jupyter_dir / JUPYTER_CONF_FILENAME, mode="w") as f:
+        f.write(_JUPYTER_CONF)
+    with open(jupyter_dir / "entry.sh", mode="w") as f:
+        f.write(_JUPYTER_ENTRY_SCRIPT)
 
 
 def main():
