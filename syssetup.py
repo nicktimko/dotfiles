@@ -276,6 +276,13 @@ APT_PYBUILD_PACKAGES = [
     "tk-dev",
 ]
 
+BREW_PYBUILD_PACKAGES = [
+    "autoconf",
+    "readline",
+    "tcl-tk",
+    "xz",
+]
+
 @install_pybuild_libs.register(OS.DEBIAN)
 def _(args):
     need_libs = missing_pybuild_libs()
@@ -285,6 +292,10 @@ def _(args):
     L.info(f"installing: {', '.join(need_libs)}")
     # subprocess.check_call(["sudo", "apt-get", "update"])
     subprocess.check_call(["sudo", "apt-get", "install", "-y", *need_libs])
+
+@install_pybuild_libs.register(OS.MACOS)
+def _(args):
+    need_libs = missing_pybuild_libs()
 
 
 @distrodispatch
@@ -311,6 +322,15 @@ def deb_package_status(pkg_name):
     else:
         return set()
     return set(statuses.split())
+
+
+@missing_pybuild_libs.register(OS.MACOS)
+def _():
+    have = {False: set(), True: set()}
+    for pkg in BREW_PYBUILD_PACKAGES:
+        have["installed" in brew_package_status(pkg)].add(pkg)
+    L.debug(f"package installed?: {have}")
+    return have[False]
 
 
 def print_abbreviated_log(name, colorcode, content, line_lim=20):
